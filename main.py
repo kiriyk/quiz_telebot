@@ -1,8 +1,6 @@
 from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 import asyncio
-import threading
-import time
 
 from settings import BOT_TOKEN, ADMIN_ID
 from quiz_options import quiz_questions, greeting_message, result_messages, help_message, admin_message
@@ -33,8 +31,9 @@ class TelebotQuiz:
             await self.bot.send_message(message.chat.id, greeting_message.format(message.chat.username,
                                                                                  str(len(quiz_questions))))
             self.winners.update({f'{message.chat.username}': [0, 0]})
-            time.sleep(3)
-            await self.start_quiz(message, 0)
+            await asyncio.sleep(3)
+            task = asyncio.create_task(self.start_quiz(message, 0))
+            await task
 
     async def start_quiz(self, message, question_index):
         if question_index < len(quiz_questions):
@@ -52,11 +51,12 @@ class TelebotQuiz:
 
             message = await self.bot.send_message(message.chat.id, question, reply_markup=keyboard)
 
-            timer_thread = threading.Timer(question_data['timer'], self.question_timer, args=(message,))
-            self.timers[f'{message.chat.id}'] = timer_thread
-            timer_thread.start()
+            timer = asyncio.create_task(self.question_timer(message))
+            self.timers[f'{message.chat.id}'] = timer
+            await timer
         else:
-            await self.send_quiz_result(message)
+            task = asyncio.create_task(self.send_quiz_result(message))
+            await task
 
     async def handle_answer(self, message):
         if message.chat.id == ADMIN_ID and (message.text == button_1 or message.text == button_2):
@@ -81,7 +81,8 @@ class TelebotQuiz:
 
             self.winners[f'{message.chat.username}'][0] += 1
 
-            await self.start_quiz(message, question_idx + 1)
+            task = asyncio.create_task(self.start_quiz(message, question_idx + 1))
+            await task
 
     async def send_quiz_result(self, message):
         if self.winners.get(f'{message.chat.username}')[1] == len(quiz_questions):
@@ -99,9 +100,13 @@ class TelebotQuiz:
         await self.bot.send_message(message.chat.id, result_message, reply_markup=types.ReplyKeyboardRemove())
 
     async def question_timer(self, message):
-        time.sleep(quiz_questions[self.winners[f'{message.chat.username}'][0]]['timer'])
-        await self.bot.send_message(message.chat.id, 'Время вышло, переходим к следующему вопросу!')
-        await self.start_quiz(message, self.winners[f'{message.chat.username}'][0] + 1)
+        try:
+            await asyncio.sleep(quiz_questions[self.winners[f'{message.chat.username}'][0]]['timer'])
+            await self.bot.send_message(message.chat.id, 'Время вышло, переходим к следующему вопросу!')
+            self.winners[f'{message.chat.username}'][0] += 1
+            await self.start_quiz(message, self.winners[f'{message.chat.username}'][0])
+        except asyncio.CancelledError:
+            pass
 
     async def help_command(self, message):
         await self.bot.send_message(message.chat.id, help_message)
